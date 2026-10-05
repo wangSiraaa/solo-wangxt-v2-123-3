@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
 import { defineConfig } from 'vite';
+import { readFileSync } from 'node:fs';
 
 void defineConfig;
 
@@ -175,7 +176,83 @@ await page.waitForTimeout(300);
 const jumpPaths = await page.evaluate(() => document.querySelectorAll('canvas').length);
 check('Konva canvas 已挂载', jumpPaths >= 1, `${jumpPaths} canvas`);
 
-// ---------- 10. 无控制台错误 ----------
+// ---------- 10. 工程导出 → 导入往返（当前工程为第 8 步载入的桥式网络） ----------
+await page.waitForTimeout(800); // 等自动保存落盘，保证原工程已在 IndexedDB
+const bridgeTitle = '桥式网络（验证 KCL 与功率平衡）';
+const [download] = await Promise.all([
+  page.waitForEvent('download'),
+  page.getByRole('button', { name: '导出', exact: true }).click(),
+]);
+const dlPath = await download.path();
+const exportedText = readFileSync(dlPath!, 'utf8');
+const exportedJson = JSON.parse(exportedText);
+check(
+  '导出：含格式标识与版本，不含 IndexedDB 内部键',
+  exportedJson.format === 'dc-workbench/project' &&
+    exportedJson.version === 1 &&
+    !('id' in exportedJson) &&
+    !('updatedAt' in exportedJson) &&
+    exportedJson.nodes.length === 4 &&
+    exportedJson.comps.length === 6,
+);
+
+// 导入同一文件 → 校验通过 → 确认对话框
+await page.setInputFiles('input[data-testid="import-file"]', dlPath!);
+await page.waitForTimeout(400);
+const dlg = page.getByRole('dialog');
+check('导入：校验通过后需用户确认', (await dlg.getByRole('button', { name: '创建新工程', exact: true }).count()) === 1);
+check('导入：提示已存在同名工程', /已存在同名工程/.test(await dlg.innerText()));
+await dlg.getByRole('button', { name: '创建新工程', exact: true }).click();
+await page.waitForTimeout(700);
+
+// 往返后求解结果不变：KCL 全部平衡（桥式网络含跳线交叉）
+await page.getByRole('button', { name: /节点 KCL/ }).click();
+await page.waitForTimeout(200);
+const rtRows = await page.locator('table.data tbody tr').count();
+const rtBad = await page.locator('table.data tbody tr td:last-child:text("✗")').count();
+check('往返：导入工程的 KCL 全部平衡', rtRows >= 4 && rtBad === 0, `${rtRows} 行, ${rtBad} 行失败`);
+
+// 同名工程并存且可分别打开（此前步骤已保存过多个同名桥式工程，导入应再 +1；
+// 点击行会触发保存并改变排序，故只按位置各点一次、不假设谁是谁）
+await page.getByRole('button', { name: '工程 ▾', exact: true }).click();
+await page.waitForTimeout(400);
+const sameTitle = page.locator('.project-row', { hasText: bridgeTitle });
+const afterImportCount = await sameTitle.count();
+check('同名工程：原工程与导入工程并存', afterImportCount >= 2, `${afterImportCount} 行`);
+await sameTitle.nth(0).locator('.p-title').click();
+await page.waitForTimeout(1200); // 等防抖保存完成，列表顺序稳定
+let openBad = await page.locator('table.data tbody tr td:last-child:text("✗")').count();
+check('同名工程：第一个工程可单独打开且求解正常', openBad === 0);
+await page.getByRole('button', { name: '工程 ▾', exact: true }).click();
+await page.waitForTimeout(400);
+await page.locator('.project-row', { hasText: bridgeTitle }).nth(1).locator('.p-title').click(); // 另一个（排序已稳定）
+await page.waitForTimeout(1200);
+openBad = await page.locator('table.data tbody tr td:last-child:text("✗")').count();
+check('同名工程：第二个工程可单独打开且求解正常', openBad === 0);
+
+// ---------- 11. 损坏文件被拒绝且不破坏当前工程 ----------
+const brokenObj = JSON.parse(exportedText);
+brokenObj.comps[1].a = 'n_broken_ref'; // R1 的端点指向不存在的接点
+await page.setInputFiles('input[data-testid="import-file"]', {
+  name: 'broken.json',
+  mimeType: 'application/json',
+  buffer: Buffer.from(JSON.stringify(brokenObj)),
+});
+await page.waitForTimeout(400);
+const dlg2 = page.getByRole('dialog');
+const dlg2Text = await dlg2.innerText();
+check('损坏引用：导入被拒绝并说明原因', /无法导入/.test(dlg2Text) && /不存在的接点 "n_broken_ref"/.test(dlg2Text), dlg2Text.slice(0, 120).replace(/\n/g, ' '));
+check('损坏引用：问题指向对应元件 R1', /元件\s+R1/.test(dlg2Text));
+check('损坏引用：不提供导入按钮', (await dlg2.getByRole('button', { name: '创建新工程', exact: true }).count()) === 0);
+await dlg2.getByRole('button', { name: '关闭', exact: true }).click();
+await page.waitForTimeout(300);
+check('损坏引用：当前工程未被破坏（画布仍在）', (await page.locator('.konvajs-content').count()) === 1);
+await page.getByRole('button', { name: '工程 ▾', exact: true }).click();
+await page.waitForTimeout(400);
+check('损坏引用：工程列表未变化（同名工程数量不变）', (await page.locator('.project-row', { hasText: bridgeTitle }).count()) === afterImportCount);
+await page.getByRole('button', { name: '工程 ▾', exact: true }).click(); // 收起菜单
+
+// ---------- 12. 无控制台错误 ----------
 const realErrors = errors.filter((e) => !/favicon/i.test(e));
 check('浏览器无运行时错误', realErrors.length === 0, realErrors.slice(0, 3).join(' | '));
 

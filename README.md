@@ -17,6 +17,9 @@
 - **拖动图形不改变连接**：拖元件只改变它相对两端接点的图形参数 `(t, offset)`，
   `a/b` 连接关系不动；拖接点移动整网几何
 - **工程存 IndexedDB**：编辑后防抖自动保存，支持多工程切换/删除
+- **工程 JSON 导入/导出**：导出文件含接点、元件、连接、位置与参考地（不含 IndexedDB
+  内部键），可跨浏览器交换；导入先校验数据版本、编号引用、元件值与重复地并列出问题
+  对应的元件/接点，确认后总是创建新工程，绝不覆盖已有工程（同名工程可并存）
 - 零电阻（0Ω 电阻与理想导线）先做并查集**超节点收缩**再列方程
 - 结构预检：浮空子网、孤立节点、电流源割集冲突、纯电压源回路 KVL 一致性
 
@@ -37,8 +40,8 @@ npm install
 npm run dev       # 开发服务器
 npm run build     # 类型无关的生产构建
 npm run check     # svelte-check 类型检查（0 error）
-npm run test      # vitest：引擎/状态/几何/SSR/持久化单元测试（34 例）
-npm run e2e       # Playwright + Chromium 端到端冒烟（21 例）
+npm run test      # vitest：引擎/状态/几何/SSR/持久化/导入导出单元测试（49 例）
+npm run e2e       # Playwright + Chromium 端到端冒烟（33 例）
 ```
 
 > e2e 需要可用的 Chromium：`npx playwright install chromium`。
@@ -61,9 +64,10 @@ src/
     schematic/renderer.ts  Konva 渲染器
     factory.ts       内置示例（桥式/串联/矛盾/浮空/孤立/零电阻/割集）
     storage.ts       IndexedDB 封装
+    transfer.ts      工程 JSON 导出 / 导入校验 / 新工程构建
     store.svelte.ts  工作台状态与编辑动作（runes）
     wb.svelte.ts     全局单例
-  components/        Toolbar / Schematic / Inspector / AnalysisPanel
+  components/        Toolbar / Schematic / Inspector / AnalysisPanel / Transfer
 ```
 
 ## 操作

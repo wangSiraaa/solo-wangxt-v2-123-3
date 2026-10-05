@@ -3,6 +3,7 @@
   import { EXAMPLES } from '../lib/factory';
   import type { Circuit } from '../lib/engine/types';
   import { storage } from '../lib/storage';
+  import Transfer from './Transfer.svelte';
 
   const tools: { key: Tool; label: string; hint: string }[] = [
     { key: 'select', label: '选择/拖动', hint: 'S' },
@@ -67,6 +68,8 @@
   </div>
 
   <div class="spacer"></div>
+
+  <Transfer />
 
   <div class="dropdown">
     <button onclick={() => { showExamples = !showExamples; }}>载入示例 ▾</button>
