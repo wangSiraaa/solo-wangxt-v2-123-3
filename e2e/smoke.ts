@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
 import { defineConfig } from 'vite';
+import { readFile, writeFile } from 'node:fs/promises';
 
 void defineConfig;
 
@@ -175,7 +176,111 @@ await page.waitForTimeout(300);
 const jumpPaths = await page.evaluate(() => document.querySelectorAll('canvas').length);
 check('Konva canvas 已挂载', jumpPaths >= 1, `${jumpPaths} canvas`);
 
-// ---------- 10. 无控制台错误 ----------
+// ---------- 10. 工程 JSON 导出 / 导入 ----------
+await page.getByRole('button', { name: /载入示例/ }).click();
+await page.getByRole('button', { name: '零电阻边界' }).click();
+await page.waitForTimeout(400);
+
+// 导出：拦截下载并检查文件内容
+const [download] = await Promise.all([
+  page.waitForEvent('download'),
+  page.getByRole('button', { name: '导出 JSON' }).click(),
+]);
+const dlPath = await download.path();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const exported: any = JSON.parse(await readFile(dlPath!, 'utf8'));
+check('导出：声明格式与数据版本', exported.format === 'dc-workbench-project' && exported.version === 1);
+check('导出：不含 IndexedDB 内部键（id/updatedAt）', !('id' in exported) && !('updatedAt' in exported));
+check(
+  '导出：包含接点/元件/连接/位置/参考地',
+  exported.nodes.length === 4 &&
+    exported.comps.length === 5 &&
+    exported.nodes.every((n: Record<string, unknown>) => ['id', 'name', 'x', 'y', 'ground'].every((k) => k in n)) &&
+    exported.comps.every((c: Record<string, unknown>) =>
+      ['id', 'type', 'name', 'a', 'b', 'value', 't', 'offset'].every((k) => k in c),
+    ) &&
+    exported.nodes.filter((n: { ground: boolean }) => n.ground).length === 1,
+);
+
+// 导入刚导出的文件 → 校验通过 → 用户确认创建新工程
+await page.locator('input[type=file]').setInputFiles(dlPath!);
+await page.waitForTimeout(300);
+const dlg = page.locator('.io-dialog');
+const dlgText = (await dlg.count()) ? await dlg.innerText() : '';
+check(
+  '导入：校验通过后给出工程摘要并询问',
+  /校验通过/.test(dlgText) && /创建新工程/.test(dlgText) && /取消/.test(dlgText),
+  dlgText.slice(0, 100).replace(/\n/g, ' '),
+);
+await dlg.getByRole('button', { name: '创建新工程' }).click();
+await page.waitForTimeout(700);
+
+// 导入后的工程求解行为不变（零电阻示例：无错误、KCL 全平衡）
+await page.getByRole('button', { name: /诊断/ }).click();
+await page.waitForTimeout(200);
+const impDiag = await page.locator('.issues').innerText();
+check('导入工程：求解无错误（连接与行为不变）', !/错误/.test(impDiag), impDiag.slice(0, 100).replace(/\n/g, ' '));
+await page.getByRole('button', { name: /节点 KCL/ }).click();
+await page.waitForTimeout(150);
+const impKclBad = await page.locator('table.data tbody tr td:last-child:text("✗")').count();
+check('导入工程：KCL 全部平衡', impKclBad === 0);
+
+// 工程列表中两个同名工程并存，且能分别打开
+await page.getByRole('button', { name: /^工程/ }).click();
+await page.waitForTimeout(300);
+const sameCount = await page.locator('.project-row', { hasText: '零电阻边界' }).count();
+check('同名工程：导入后两个同名工程并存', sameCount === 2, `${sameCount} 个`);
+await page.locator('.project-row', { hasText: '零电阻边界' }).nth(0).click();
+await page.waitForTimeout(300);
+const title1 = await page.locator('input.title').inputValue();
+await page.getByRole('button', { name: /^工程/ }).click();
+await page.waitForTimeout(200);
+await page.locator('.project-row', { hasText: '零电阻边界' }).nth(1).click();
+await page.waitForTimeout(300);
+const title2 = await page.locator('input.title').inputValue();
+check(
+  '同名工程：原工程与新工程都能分别打开',
+  title1.includes('零电阻边界') && title2.includes('零电阻边界'),
+  `${title1} / ${title2}`,
+);
+
+// 损坏的端点引用 → 拒绝导入且不产生新工程
+const countProjects = () =>
+  page.evaluate(
+    async () =>
+      await new Promise<number>((resolve) => {
+        const req = indexedDB.open('dc-workbench');
+        req.onsuccess = () => {
+          const db = req.result;
+          const tx = db.transaction('circuits', 'readonly');
+          tx.objectStore('circuits').count().onsuccess = (e) =>
+            resolve((e.target as IDBRequest).result as number);
+        };
+        req.onerror = () => resolve(-1);
+      }),
+  );
+const projBefore = await countProjects();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const badObj = { ...exported, comps: exported.comps.map((c: any, i: number) => (i === 0 ? { ...c, a: 'n_ghost' } : c)) };
+await writeFile('/tmp/dcw-bad-project.json', JSON.stringify(badObj));
+await page.locator('input[type=file]').setInputFiles('/tmp/dcw-bad-project.json');
+await page.waitForTimeout(300);
+const dlg2 = page.locator('.io-dialog');
+const badText = (await dlg2.count()) ? await dlg2.innerText() : '';
+check(
+  '损坏引用：导入被拒绝并说明问题',
+  /无法导入/.test(badText) && /不存在的接点/.test(badText) && /n_ghost/.test(badText),
+  badText.slice(0, 140).replace(/\n/g, ' '),
+);
+const refChips = await dlg2.locator('.io-ref').count();
+check('损坏引用：界面列出问题对应的元件/接点', refChips >= 2, `${refChips} 个引用芯片`);
+check('损坏引用：不提供“创建新工程”按钮', (await dlg2.getByRole('button', { name: '创建新工程' }).count()) === 0);
+await dlg2.getByRole('button', { name: '取消' }).click();
+await page.waitForTimeout(200);
+const projAfter = await countProjects();
+check('损坏引用：未产生新工程，已有工程不受影响', projAfter === projBefore && projBefore >= 2, `${projBefore} → ${projAfter}`);
+
+// ---------- 11. 无控制台错误 ----------
 const realErrors = errors.filter((e) => !/favicon/i.test(e));
 check('浏览器无运行时错误', realErrors.length === 0, realErrors.slice(0, 3).join(' | '));
 

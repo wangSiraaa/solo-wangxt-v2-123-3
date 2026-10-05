@@ -3,6 +3,7 @@
   import { EXAMPLES } from '../lib/factory';
   import type { Circuit } from '../lib/engine/types';
   import { storage } from '../lib/storage';
+  import ProjectIO from './ProjectIO.svelte';
 
   const tools: { key: Tool; label: string; hint: string }[] = [
     { key: 'select', label: '选择/拖动', hint: 'S' },
@@ -124,6 +125,8 @@
       </div>
     {/if}
   </div>
+
+  <ProjectIO />
 
   <button onclick={() => void wb.saveNow()}>保存</button>
   <span class="save-state" data-state={wb.saveState}>

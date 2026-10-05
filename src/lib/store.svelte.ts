@@ -2,6 +2,7 @@ import type { Circuit, Comp, CompType, Node } from './engine/types';
 import type { AnalysisResult } from './engine/types';
 import { analyze } from './engine/analyze';
 import { makeComp, makeNode, newCircuit } from './factory';
+import { buildImportedCircuit, type ImportedProject } from './projectIO';
 import { storage } from './storage';
 
 export type Tool = 'select' | 'node' | 'wire' | 'R' | 'V' | 'I';
@@ -69,6 +70,17 @@ export function createWorkbench() {
   async function createProject(title?: string) {
     load(newCircuit(title));
     await saveNow();
+  }
+
+  /**
+   * 导入工程：数据须先通过 projectIO.parseProject 校验。
+   * 始终以全新记录键创建新工程并立即保存——不覆盖、不修改 IndexedDB 中任何已有工程。
+   */
+  async function importProject(p: ImportedProject): Promise<Circuit> {
+    const circuit = buildImportedCircuit(p);
+    load(circuit);
+    await saveNow();
+    return circuit;
   }
 
   async function restoreLast(): Promise<boolean> {
@@ -245,6 +257,7 @@ export function createWorkbench() {
     },
     load,
     createProject,
+    importProject,
     restoreLast,
     saveNow,
     scheduleSave,
